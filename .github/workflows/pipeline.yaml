@@ -1,0 +1,39 @@
+name: Video Processing Pipeline
+on:
+  repository_dispatch:
+    types: [process_video]
+
+jobs:
+  setup_matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set.outputs.matrix }}
+    steps:
+      - id: set
+        # Generates an array of [0, 1, 2... 159] for 160 chunks
+        run: echo "matrix=$(node -e 'console.log(JSON.stringify(Array.from({length: 160}, (_, i) => i)))')" >> $GITHUB_OUTPUT
+
+  process_chunk:
+    needs: setup_matrix
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        chunk: ${{ fromJson(needs.setup_matrix.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+          
+      - name: Install Dependencies
+        run: pip install opencv-python-headless onnxruntime requests numpy
+
+      - name: Run Inference
+        env:
+          WORKER_URL: ${{ secrets.WORKER_URL }}
+          VIDEO_URL: ${{ github.event.client_payload.video_url }}
+          JOB_ID: ${{ github.event.client_payload.job_id }}
+          CHUNK_ID: ${{ matrix.chunk }}
+        run: python runner/main.py

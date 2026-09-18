@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Turbo Video Analyzer</title>
+    <style>
+        body { font-family: system-ui; max-width: 600px; margin: 40px auto; padding: 20px; background: #f9fafb; }
+        .card { background: white; padding: 24px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+        input { width: 100%; padding: 10px; margin-bottom: 12px; border: 1px solid #ddd; border-radius: 4px; box-sizing: border-box;}
+        button { width: 100%; padding: 10px; background: #2563eb; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: bold;}
+        button:hover { background: #1d4ed8; }
+        #progress-bar { width: 0%; height: 8px; background: #10b981; border-radius: 4px; transition: width 0.3s; margin-top: 10px;}
+        #results { margin-top: 20px; padding: 10px; background: #1f2937; color: #10b981; border-radius: 4px; display: none; font-family: monospace;}
+    </style>
+</head>
+<body>
+
+<div class="card">
+    <h2>Upload Video URL</h2>
+    <input type="text" id="videoUrl" placeholder="https://example.com/video.mp4">
+    <button onclick="startAnalysis()">Analyze Video</button>
+    
+    <div style="background: #e5e7eb; border-radius: 4px; margin-top: 20px;">
+        <div id="progress-bar"></div>
+    </div>
+    <p id="status-text" style="text-align: center; color: #6b7280; font-size: 14px;">Waiting for input...</p>
+
+    <div id="results"></div>
+</div>
+
+<script>
+    const WORKER_URL = "https://video-brain.yourusername.workers.dev"; // Replace this
+
+    async function startAnalysis() {
+        const videoUrl = document.getElementById('videoUrl').value;
+        if(!videoUrl) return alert("Enter a URL");
+
+        document.getElementById('status-text').innerText = "Starting 160 parallel servers...";
+        
+        // Send to Cloudflare Worker
+        const res = await fetch(`${WORKER_URL}/start`, {
+            method: 'POST',
+            body: JSON.stringify({ videoUrl })
+        });
+        const { jobId } = await res.json();
+        
+        // Poll for updates every 3 seconds
+        const interval = setInterval(async () => {
+            const statRes = await fetch(`${WORKER_URL}/status/${jobId}`);
+            const state = await statRes.json();
+            
+            const percentage = (state.completed / 160) * 100;
+            document.getElementById('progress-bar').style.width = percentage + "%";
+            document.getElementById('status-text').innerText = `Processed ${state.completed}/160 chunks...`;
+
+            if (state.status === "completed") {
+                clearInterval(interval);
+                document.getElementById('status-text').innerText = "Analysis Complete!";
+                document.getElementById('results').style.display = "block";
+                
+                // Format seconds into MM:SS
+                const formattedTimes = state.timestamps.map(s => {
+                    const mins = Math.floor(s / 60);
+                    const secs = s % 60;
+                    return `[${mins}:${secs.toString().padStart(2, '0')}] Human Detected`;
+                });
+                
+                document.getElementById('results').innerHTML = formattedTimes.join("<br>");
+            }
+        }, 3000);
+    }
+</script>
+</body>
+</html>
