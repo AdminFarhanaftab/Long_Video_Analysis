@@ -24,15 +24,20 @@ export default {
       region: env.B2_REGION,
     });
 
-    // 1. GENERATE DIRECT CLOUD UPLOAD LINK
+// 1. GENERATE DIRECT CLOUD UPLOAD LINK
     if (url.pathname === "/get-upload-link" && request.method === "GET") {
       const fileName = `vid_${Date.now()}.mp4`;
-      const b2Url = new URL(`https://${env.B2_ENDPOINT}/${env.B2_BUCKET}/${fileName}`);
+      const b2Url = new URL(`https://${env.B2_BUCKET}.${env.B2_ENDPOINT}/${fileName}`);
       
-      const signed = await aws.sign(new Request(b2Url, { method: 'PUT' }), { aws: { signQuery: true } });
+      // Explicitly sign the Content-Type header that the browser will send
+      const signed = await aws.sign(new Request(b2Url, { 
+          method: 'PUT',
+          headers: { 'Content-Type': 'video/mp4' }
+      }), { aws: { signQuery: true } });
+      
       return new Response(JSON.stringify({ uploadUrl: signed.url, fileName }), { headers: cors });
     }
-
+    
     // 2. TRIGGER GITHUB RUNNERS
     if (url.pathname === "/start" && request.method === "POST") {
       const { fileName } = await request.json();

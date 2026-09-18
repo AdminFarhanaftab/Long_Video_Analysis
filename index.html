@@ -66,20 +66,37 @@
         if(!secret) return alert("System Password required.");
         if(!fileInput.files[0]) return alert("Select a video file.");
         
+        const file = fileInput.files[0];
         const authHeader = { "Authorization": `Bearer ${secret}` };
         
         uploadBtn.disabled = true;
         document.getElementById('progress-container').classList.remove('hidden');
         document.getElementById('results-container').classList.add('hidden');
         
+        // Reset colors in case of a previous failure
+        progressBar.classList.remove('bg-red-500');
+        progressBar.classList.add('bg-emerald-500');
+        statusText.classList.remove('text-red-400');
+        statusText.classList.add('text-emerald-400');
+        
         try {
             statusText.innerText = "Authenticating and acquiring S3 presigned URL...";
             const linkRes = await fetch(`${WORKER_URL}/get-upload-link`, { headers: authHeader });
-            if (!linkRes.ok) throw new Error("Authentication rejected.");
+            if (!linkRes.ok) throw new Error("Authentication rejected by gateway.");
             const { uploadUrl, fileName } = await linkRes.json();
 
             statusText.innerText = "Streaming file direct to Backblaze buffer...";
-            await fetch(uploadUrl, { method: 'PUT', body: fileInput.files[0], headers: { 'Content-Type': 'video/mp4' } });
+            const uploadRes = await fetch(uploadUrl, { 
+                method: 'PUT', 
+                body: file, 
+                headers: { 'Content-Type': 'video/mp4' } 
+            });
+
+            // STRICT FAILSAFE: Halts the pipeline if Backblaze rejects the upload
+            if (!uploadRes.ok) {
+                const errText = await uploadRes.text();
+                throw new Error(`Cloud Storage Rejected Upload (${uploadRes.status}):\n${errText}`);
+            }
 
             statusText.innerText = "Spawning 160 GitHub runner instances...";
             const startRes = await fetch(`${WORKER_URL}/start`, {
@@ -107,16 +124,30 @@
                         document.getElementById('results').innerHTML = "No human presence detected.";
                     } else {
                         state.timestamps.sort((a,b) => a-b);
-                        const formattedTimes = state.timestamps.map(s => `> Subject Detected @ [${Math.floor(s / 60)}:${(s % 60).toString().padStart(2, '0')}]`);
+                        
+                        // Enhanced time formatting to support videos longer than 60 minutes
+                        const formattedTimes = state.timestamps.map(s => {
+                            const hrs = Math.floor(s / 3600);
+                            const mins = Math.floor((s % 3600) / 60);
+                            const secs = s % 60;
+                            const timeStr = hrs > 0 
+                                ? `${hrs}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`
+                                : `${mins}:${secs.toString().padStart(2, '0')}`;
+                            return `> Subject Detected @ [${timeStr}]`;
+                        });
+                        
                         document.getElementById('results').innerHTML = formattedTimes.join("\n");
                     }
                     uploadBtn.disabled = false;
                 }
             }, 3000);
         } catch (e) {
+            console.error(e);
             alert(e.message);
             uploadBtn.disabled = false;
             statusText.innerText = "Pipeline Interrupted.";
+            statusText.classList.replace('text-emerald-400', 'text-red-400');
+            progressBar.classList.replace('bg-emerald-500', 'bg-red-500');
         }
     }
 </script>
