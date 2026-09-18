@@ -24,17 +24,21 @@ while frames_processed < CHUNK_DURATION_SEC:
     ret, frame = cap.read()
     if not ret: break
     
+    # 1. Skip forward 1 second (assuming ~30fps)
     cap.set(cv2.CAP_PROP_POS_FRAMES, cap.get(cv2.CAP_PROP_POS_FRAMES) + 29)
-    img = cv2.resize(frame, (640, 640))
+    
+    # 2. Fix the color channel order for the AI (BGR to RGB)
+    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    
+    # 3. Format for YOLOv8
+    img = cv2.resize(frame_rgb, (640, 640))
     img = img.transpose((2, 0, 1))[np.newaxis, :, :, :].astype(np.float32) / 255.0
     
     outputs = session.run(None, {session.get_inputs()[0].name: img})
-    
-    # YOLOv8 tensor shape is (1, 84, 8400). Row 4 is Class 0 (Person).
     person_scores = outputs[0][0][4] 
     
-    # Check if the AI is at least 60% confident it sees a human
-    if np.max(person_scores) > 0.6: 
+    # 4. Use a 45% confidence threshold for the 'nano' model
+    if np.max(person_scores) > 0.45: 
         found_timestamps.append(START_SEC + frames_processed)
         
     frames_processed += 1
