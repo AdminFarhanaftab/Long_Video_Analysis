@@ -10,7 +10,8 @@ jobs:
       matrix: ${{ steps.set.outputs.matrix }}
     steps:
       - id: set
-        run: echo "matrix=$(node -e 'console.log(JSON.stringify(Array.from({length: 160}, (_, i) => i)))')" >> $GITHUB_OUTPUT
+        run: |
+          echo "matrix=$(node -e 'console.log(JSON.stringify(Array.from({length: 160}, (_, i) => i)))')" >> $GITHUB_OUTPUT
 
   process_chunk:
     needs: setup_matrix
