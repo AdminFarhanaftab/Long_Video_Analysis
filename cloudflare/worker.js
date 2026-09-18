@@ -11,45 +11,43 @@ export default {
 
     if (request.method === "OPTIONS") return new Response(null, { headers: cors });
 
-    // SECURITY CHECK: Validate Master Secret
+    // SECURITY: Validate Master Password
     const authHeader = request.headers.get("Authorization");
     if (authHeader !== `Bearer ${env.API_SECRET}`) {
-      return new Response("Unauthorized", { status: 401, headers: cors });
+      return new Response(JSON.stringify({ error: "Unauthorized access" }), { status: 401, headers: cors });
     }
 
     const aws = new AwsClient({
-      accessKeyId: env.STORJ_ACCESS_KEY,
-      secretAccessKey: env.STORJ_SECRET_KEY,
+      accessKeyId: env.B2_KEY_ID,
+      secretAccessKey: env.B2_APPLICATION_KEY,
       service: 's3',
-      region: 'us-east-1', // Storj default S3 region
+      region: env.B2_REGION,
     });
 
-    // 1. GENERATE SECURE UPLOAD LINK
+    // 1. GENERATE DIRECT CLOUD UPLOAD LINK
     if (url.pathname === "/get-upload-link" && request.method === "GET") {
       const fileName = `vid_${Date.now()}.mp4`;
-      const storjUrl = new URL(`https://gateway.storjshare.io/video-buffer/${fileName}`);
+      const b2Url = new URL(`https://${env.B2_ENDPOINT}/${env.B2_BUCKET}/${fileName}`);
       
-      const signed = await aws.sign(new Request(storjUrl, { method: 'PUT' }), { aws: { signQuery: true } });
+      const signed = await aws.sign(new Request(b2Url, { method: 'PUT' }), { aws: { signQuery: true } });
       return new Response(JSON.stringify({ uploadUrl: signed.url, fileName }), { headers: cors });
     }
 
-    // 2. START PIPELINE & GENERATE READ LINK
+    // 2. TRIGGER GITHUB RUNNERS
     if (url.pathname === "/start" && request.method === "POST") {
       const { fileName } = await request.json();
       const jobId = "job_" + Math.random().toString(36).substr(2, 9);
       
-      // Generate secure read link for GitHub runners (valid for a few hours)
-      const storjUrl = new URL(`https://gateway.storjshare.io/video-buffer/${fileName}`);
-      const signedGet = await aws.sign(new Request(storjUrl, { method: 'GET' }), { aws: { signQuery: true } });
+      // Generate a secure read link specifically for GitHub runners
+      const b2Url = new URL(`https://${env.B2_ENDPOINT}/${env.B2_BUCKET}/${fileName}`);
+      const signedGet = await aws.sign(new Request(b2Url, { method: 'GET' }), { aws: { signQuery: true } });
       
-      // Save state to Redis
       await fetch(`${env.UPSTASH_URL}/set/${jobId}`, {
         headers: { Authorization: `Bearer ${env.UPSTASH_TOKEN}` },
         method: "POST",
         body: JSON.stringify({ status: "processing", completed: 0, timestamps: [], fileName: fileName })
       });
 
-      // Trigger GitHub Action
       await fetch(`https://api.github.com/repos/${env.GITHUB_USERNAME}/${env.GITHUB_REPO}/dispatches`, {
         method: "POST",
         headers: {
@@ -66,7 +64,7 @@ export default {
       return new Response(JSON.stringify({ jobId }), { headers: cors });
     }
 
-    // 3. CHECK STATUS
+    // 3. FRONTEND POLLING STATUS
     if (url.pathname.startsWith("/status/")) {
       const jobId = url.pathname.split("/")[2];
       const redisRes = await fetch(`${env.UPSTASH_URL}/get/${jobId}`, {
@@ -76,7 +74,7 @@ export default {
       return new Response(result, { headers: cors });
     }
 
-    // 4. RECEIVE DATA & AUTO-DELETE FROM STORJ
+    // 4. RECEIVE AI LOGS & AUTO-DELETE VIDEO
     if (url.pathname === "/update" && request.method === "POST") {
       const { jobId, foundTimestamps } = await request.json();
       
@@ -88,10 +86,10 @@ export default {
       state.completed += 1;
       state.timestamps.push(...foundTimestamps);
       
+      // Purge the video from Backblaze once all 160 runners finish
       if (state.completed >= 160) {
         state.status = "completed";
-        // Auto-Delete from Storj to preserve free tier limits
-        const deleteUrl = new URL(`https://gateway.storjshare.io/video-buffer/${state.fileName}`);
+        const deleteUrl = new URL(`https://${env.B2_ENDPOINT}/${env.B2_BUCKET}/${state.fileName}`);
         const deleteReq = await aws.sign(new Request(deleteUrl, { method: 'DELETE' }));
         await fetch(deleteReq);
       }

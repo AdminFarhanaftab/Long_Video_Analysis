@@ -3,64 +3,85 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Secure Turbo Analyzer</title>
-    <style>
-        body { font-family: system-ui; max-width: 600px; margin: 40px auto; padding: 20px; background: #f9fafb; }
-        .card { background: white; padding: 24px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
-        input { width: 100%; padding: 10px; margin-bottom: 12px; border: 1px solid #ddd; border-radius: 4px; box-sizing: border-box;}
-        button { width: 100%; padding: 10px; background: #2563eb; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: bold;}
-        button:hover { background: #1d4ed8; }
-        button:disabled { background: #9ca3af; cursor: not-allowed; }
-        #progress-bar { width: 0%; height: 8px; background: #10b981; border-radius: 4px; transition: width 0.3s; margin-top: 10px;}
-        #results { margin-top: 20px; padding: 10px; background: #1f2937; color: #10b981; border-radius: 4px; display: none; font-family: monospace; max-height: 300px; overflow-y: auto;}
-    </style>
+    <title>Zero-Trust Video Analyzer</title>
+    <script src="https://cdn.tailwindcss.com"></script>
 </head>
-<body>
-<div class="card">
-    <h2>Secure Video Upload</h2>
-    <input type="password" id="apiSecret" placeholder="Enter System Password">
-    <input type="file" id="videoFile" accept="video/mp4">
-    <button id="uploadBtn" onclick="processVideo()">Upload & Analyze</button>
-    
-    <div style="background: #e5e7eb; border-radius: 4px; margin-top: 20px;">
-        <div id="progress-bar"></div>
+<body class="bg-slate-900 text-slate-200 min-h-screen flex items-center justify-center p-4 font-sans">
+
+    <div class="max-w-2xl w-full bg-slate-800 rounded-2xl shadow-2xl overflow-hidden border border-slate-700">
+        
+        <div class="bg-slate-950 px-8 py-6 border-b border-slate-700">
+            <h1 class="text-3xl font-bold text-white flex items-center gap-3">
+                <svg class="w-8 h-8 text-emerald-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"></path></svg>
+                Zero-Trust Video Analyzer
+            </h1>
+            <p class="text-slate-400 mt-2 text-sm">Strictly authenticated parallel AI processing. Files stream securely to a localized buffer, are analyzed across 160 isolated nodes, and instantly purged upon completion.</p>
+        </div>
+
+        <div class="p-8 space-y-6">
+            <div class="space-y-4">
+                <div>
+                    <label class="block text-sm font-medium text-slate-400 mb-1">System Authentication</label>
+                    <input type="password" id="apiSecret" placeholder="Enter API Secret" class="w-full bg-slate-900 border border-slate-600 rounded-lg px-4 py-3 text-white focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 transition-colors">
+                </div>
+                
+                <div>
+                    <label class="block text-sm font-medium text-slate-400 mb-1">Video Source (MP4)</label>
+                    <input type="file" id="videoFile" accept="video/mp4" class="w-full bg-slate-900 border border-slate-600 rounded-lg px-4 py-3 text-white file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-emerald-600 file:text-white hover:file:bg-emerald-700 transition-colors cursor-pointer">
+                </div>
+            </div>
+
+            <button id="uploadBtn" onclick="processVideo()" class="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-4 rounded-lg shadow-lg shadow-emerald-500/30 transition-all active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed">
+                Deploy AI Matrix
+            </button>
+
+            <div id="progress-container" class="hidden mt-8">
+                <div class="flex justify-between text-sm mb-2 font-medium">
+                    <span id="status-text" class="text-emerald-400">Initializing secure link...</span>
+                    <span id="percentage-text" class="text-slate-300">0%</span>
+                </div>
+                <div class="w-full bg-slate-900 rounded-full h-3 border border-slate-700 overflow-hidden">
+                    <div id="progress-bar" class="bg-emerald-500 h-3 rounded-full transition-all duration-500 ease-out" style="width: 0%"></div>
+                </div>
+            </div>
+
+            <div id="results-container" class="hidden mt-6">
+                <label class="block text-sm font-bold text-emerald-400 mb-2 uppercase tracking-wider">Detection Logs</label>
+                <div id="results" class="bg-slate-950 border border-slate-700 rounded-lg p-4 font-mono text-sm text-emerald-300 max-h-60 overflow-y-auto whitespace-pre-wrap shadow-inner leading-relaxed"></div>
+            </div>
+        </div>
     </div>
-    <p id="status-text" style="text-align: center; color: #6b7280; font-size: 14px;">Awaiting credentials and file...</p>
-    <div id="results"></div>
-</div>
 
 <script>
-    const WORKER_URL = "https://video-brain.rftl.workers.dev"; // Replace with your URL
+    const WORKER_URL = "https://video-brain.rftl.workers.dev"; // Your Worker URL
 
     async function processVideo() {
         const fileInput = document.getElementById('videoFile');
         const secret = document.getElementById('apiSecret').value;
+        const uploadBtn = document.getElementById('uploadBtn');
+        const statusText = document.getElementById('status-text');
+        const progressBar = document.getElementById('progress-bar');
+        const percentageText = document.getElementById('percentage-text');
         
-        if(!secret) return alert("Password required");
-        if(!fileInput.files[0]) return alert("Select an MP4 file");
+        if(!secret) return alert("System Password required.");
+        if(!fileInput.files[0]) return alert("Select a video file.");
         
-        const file = fileInput.files[0];
         const authHeader = { "Authorization": `Bearer ${secret}` };
         
-        document.getElementById('uploadBtn').disabled = true;
-        document.getElementById('status-text').innerText = "Authenticating and acquiring secure cloud token...";
-
+        uploadBtn.disabled = true;
+        document.getElementById('progress-container').classList.remove('hidden');
+        document.getElementById('results-container').classList.add('hidden');
+        
         try {
-            // 1. Get Presigned URL
+            statusText.innerText = "Authenticating and acquiring S3 presigned URL...";
             const linkRes = await fetch(`${WORKER_URL}/get-upload-link`, { headers: authHeader });
-            if (!linkRes.ok) throw new Error("Authentication failed");
+            if (!linkRes.ok) throw new Error("Authentication rejected.");
             const { uploadUrl, fileName } = await linkRes.json();
 
-            // 2. Upload Video
-            document.getElementById('status-text').innerText = "Uploading to secure cloud buffer...";
-            await fetch(uploadUrl, {
-                method: 'PUT',
-                body: file,
-                headers: { 'Content-Type': file.type }
-            });
+            statusText.innerText = "Streaming file direct to Backblaze buffer...";
+            await fetch(uploadUrl, { method: 'PUT', body: fileInput.files[0], headers: { 'Content-Type': 'video/mp4' } });
 
-            // 3. Start Processing
-            document.getElementById('status-text').innerText = "Deploying 160 parallel AI agents...";
+            statusText.innerText = "Spawning 160 GitHub runner instances...";
             const startRes = await fetch(`${WORKER_URL}/start`, {
                 method: 'POST',
                 headers: { ...authHeader, "Content-Type": "application/json" },
@@ -68,30 +89,34 @@
             });
             const { jobId } = await startRes.json();
 
-            // 4. Poll
             const interval = setInterval(async () => {
                 const statRes = await fetch(`${WORKER_URL}/status/${jobId}`, { headers: authHeader });
                 const state = await statRes.json();
                 
-                const percentage = (state.completed / 160) * 100;
-                document.getElementById('progress-bar').style.width = percentage + "%";
-                document.getElementById('status-text').innerText = `Analyzed ${state.completed}/160 segments...`;
+                const percentage = Math.round((state.completed / 160) * 100);
+                progressBar.style.width = percentage + "%";
+                percentageText.innerText = percentage + "%";
+                statusText.innerText = `Compiled logs from ${state.completed}/160 nodes...`;
 
                 if (state.status === "completed") {
                     clearInterval(interval);
-                    document.getElementById('status-text').innerText = "Analysis Complete! Video securely purged from cloud.";
-                    document.getElementById('results').style.display = "block";
+                    statusText.innerText = "Analysis Final. Buffer successfully purged.";
                     
-                    state.timestamps.sort((a,b) => a-b);
-                    const formattedTimes = state.timestamps.map(s => `[${Math.floor(s / 60)}:${(s % 60).toString().padStart(2, '0')}] Human Detected`);
-                    document.getElementById('results').innerHTML = formattedTimes.join("<br>");
-                    document.getElementById('uploadBtn').disabled = false;
+                    document.getElementById('results-container').classList.remove('hidden');
+                    if (state.timestamps.length === 0) {
+                        document.getElementById('results').innerHTML = "No human presence detected.";
+                    } else {
+                        state.timestamps.sort((a,b) => a-b);
+                        const formattedTimes = state.timestamps.map(s => `> Subject Detected @ [${Math.floor(s / 60)}:${(s % 60).toString().padStart(2, '0')}]`);
+                        document.getElementById('results').innerHTML = formattedTimes.join("\n");
+                    }
+                    uploadBtn.disabled = false;
                 }
             }, 3000);
         } catch (e) {
             alert(e.message);
-            document.getElementById('uploadBtn').disabled = false;
-            document.getElementById('status-text').innerText = "Error occurred.";
+            uploadBtn.disabled = false;
+            statusText.innerText = "Pipeline Interrupted.";
         }
     }
 </script>
