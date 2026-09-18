@@ -125,18 +125,37 @@
                     } else {
                         state.timestamps.sort((a,b) => a-b);
                         
-                        // Enhanced time formatting to support videos longer than 60 minutes
-                        const formattedTimes = state.timestamps.map(s => {
+                        const formatTime = (s) => {
                             const hrs = Math.floor(s / 3600);
                             const mins = Math.floor((s % 3600) / 60);
                             const secs = s % 60;
-                            const timeStr = hrs > 0 
+                            return hrs > 0 
                                 ? `${hrs}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`
                                 : `${mins}:${secs.toString().padStart(2, '0')}`;
-                            return `> Subject Detected @ [${timeStr}]`;
-                        });
+                        };
+
+                        // Group consecutive seconds into clean ranges
+                        let ranges = [];
+                        let start = state.timestamps[0];
+                        let prev = start;
+
+                        for (let i = 1; i <= state.timestamps.length; i++) {
+                            if (i < state.timestamps.length && state.timestamps[i] === prev + 1) {
+                                prev = state.timestamps[i];
+                            } else {
+                                if (start === prev) {
+                                    ranges.push(`> Subject Detected @ [${formatTime(start)}]`);
+                                } else {
+                                    ranges.push(`> Subject Detected @ [${formatTime(start)} -> ${formatTime(prev)}]`);
+                                }
+                                if (i < state.timestamps.length) {
+                                    start = state.timestamps[i];
+                                    prev = start;
+                                }
+                            }
+                        }
                         
-                        document.getElementById('results').innerHTML = formattedTimes.join("\n");
+                        document.getElementById('results').innerHTML = ranges.join("\n");
                     }
                     uploadBtn.disabled = false;
                 }

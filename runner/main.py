@@ -27,10 +27,16 @@ while frames_processed < CHUNK_DURATION_SEC:
     cap.set(cv2.CAP_PROP_POS_FRAMES, cap.get(cv2.CAP_PROP_POS_FRAMES) + 29)
     img = cv2.resize(frame, (640, 640))
     img = img.transpose((2, 0, 1))[np.newaxis, :, :, :].astype(np.float32) / 255.0
+    
     outputs = session.run(None, {session.get_inputs()[0].name: img})
     
-    if np.max(outputs[0]) > 0.5: 
+    # YOLOv8 tensor shape is (1, 84, 8400). Row 4 is Class 0 (Person).
+    person_scores = outputs[0][0][4] 
+    
+    # Check if the AI is at least 60% confident it sees a human
+    if np.max(person_scores) > 0.6: 
         found_timestamps.append(START_SEC + frames_processed)
+        
     frames_processed += 1
 
 cap.release()
