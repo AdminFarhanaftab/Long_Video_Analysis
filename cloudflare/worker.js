@@ -1,44 +1,72 @@
+import { AwsClient } from 'aws4fetch';
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
-    
-    // CORS Headers for Frontend
     const cors = {
       "Access-Control-Allow-Origin": "*",
-      "Access-Control-Allow-Methods": "POST, GET, OPTIONS",
+      "Access-Control-Allow-Methods": "POST, GET, OPTIONS, PUT, DELETE",
+      "Access-Control-Allow-Headers": "Content-Type, Authorization"
     };
+
     if (request.method === "OPTIONS") return new Response(null, { headers: cors });
 
-    // 1. START JOB: Frontend sends video URL here
+    // SECURITY CHECK: Validate Master Secret
+    const authHeader = request.headers.get("Authorization");
+    if (authHeader !== `Bearer ${env.API_SECRET}`) {
+      return new Response("Unauthorized", { status: 401, headers: cors });
+    }
+
+    const aws = new AwsClient({
+      accessKeyId: env.STORJ_ACCESS_KEY,
+      secretAccessKey: env.STORJ_SECRET_KEY,
+      service: 's3',
+      region: 'us-east-1', // Storj default S3 region
+    });
+
+    // 1. GENERATE SECURE UPLOAD LINK
+    if (url.pathname === "/get-upload-link" && request.method === "GET") {
+      const fileName = `vid_${Date.now()}.mp4`;
+      const storjUrl = new URL(`https://gateway.storjshare.io/video-buffer/${fileName}`);
+      
+      const signed = await aws.sign(new Request(storjUrl, { method: 'PUT' }), { aws: { signQuery: true } });
+      return new Response(JSON.stringify({ uploadUrl: signed.url, fileName }), { headers: cors });
+    }
+
+    // 2. START PIPELINE & GENERATE READ LINK
     if (url.pathname === "/start" && request.method === "POST") {
-      const { videoUrl } = await request.json();
+      const { fileName } = await request.json();
       const jobId = "job_" + Math.random().toString(36).substr(2, 9);
       
-      // Initialize job in Upstash Redis (0 out of 160 chunks done)
+      // Generate secure read link for GitHub runners (valid for a few hours)
+      const storjUrl = new URL(`https://gateway.storjshare.io/video-buffer/${fileName}`);
+      const signedGet = await aws.sign(new Request(storjUrl, { method: 'GET' }), { aws: { signQuery: true } });
+      
+      // Save state to Redis
       await fetch(`${env.UPSTASH_URL}/set/${jobId}`, {
         headers: { Authorization: `Bearer ${env.UPSTASH_TOKEN}` },
         method: "POST",
-        body: JSON.stringify({ status: "processing", completed: 0, timestamps: [] })
+        body: JSON.stringify({ status: "processing", completed: 0, timestamps: [], fileName: fileName })
       });
 
       // Trigger GitHub Action
-      await fetch(`https://api.github.com/repos/YOUR_USERNAME/YOUR_REPO/dispatches`, {
+      await fetch(`https://api.github.com/repos/${env.GITHUB_USERNAME}/${env.GITHUB_REPO}/dispatches`, {
         method: "POST",
         headers: {
           "Accept": "application/vnd.github.v3+json",
           "Authorization": `token ${env.GH_PAT}`,
-          "User-Agent": "Cloudflare-Worker"
+          "User-Agent": "CF-Worker"
         },
         body: JSON.stringify({
           event_type: "process_video",
-          client_payload: { video_url: videoUrl, job_id: jobId }
+          client_payload: { video_url: signedGet.url, job_id: jobId }
         })
       });
 
       return new Response(JSON.stringify({ jobId }), { headers: cors });
     }
 
-    // 2. CHECK STATUS: Frontend polls this endpoint
+    // 3. CHECK STATUS
     if (url.pathname.startsWith("/status/")) {
       const jobId = url.pathname.split("/")[2];
       const redisRes = await fetch(`${env.UPSTASH_URL}/get/${jobId}`, {
@@ -48,30 +76,35 @@ export default {
       return new Response(result, { headers: cors });
     }
 
-    // 3. UPDATE JOB: GitHub Runners post their results here
+    // 4. RECEIVE DATA & AUTO-DELETE FROM STORJ
     if (url.pathname === "/update" && request.method === "POST") {
-      const { jobId, chunkId, foundTimestamps } = await request.json();
+      const { jobId, foundTimestamps } = await request.json();
       
-      // Get current state
       const stateRes = await fetch(`${env.UPSTASH_URL}/get/${jobId}`, {
         headers: { Authorization: `Bearer ${env.UPSTASH_TOKEN}` }
       });
       let state = JSON.parse((await stateRes.json()).result);
       
-      // Update state
       state.completed += 1;
       state.timestamps.push(...foundTimestamps);
-      if (state.completed >= 160) state.status = "completed";
+      
+      if (state.completed >= 160) {
+        state.status = "completed";
+        // Auto-Delete from Storj to preserve free tier limits
+        const deleteUrl = new URL(`https://gateway.storjshare.io/video-buffer/${state.fileName}`);
+        const deleteReq = await aws.sign(new Request(deleteUrl, { method: 'DELETE' }));
+        await fetch(deleteReq);
+      }
 
-      // Save back to Redis
       await fetch(`${env.UPSTASH_URL}/set/${jobId}`, {
         headers: { Authorization: `Bearer ${env.UPSTASH_TOKEN}` },
         method: "POST",
         body: JSON.stringify(state)
       });
-      return new Response("Updated", { status: 200 });
+      
+      return new Response("Updated", { status: 200, headers: cors });
     }
 
-    return new Response("Not Found", { status: 404 });
+    return new Response("Not Found", { status: 404, headers: cors });
   }
 };
