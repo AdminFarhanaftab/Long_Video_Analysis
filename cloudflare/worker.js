@@ -37,20 +37,18 @@ export default {
       
       return new Response(JSON.stringify({ uploadUrl: signed.url, fileName }), { headers: cors });
     }
-    
-    // 2. TRIGGER GITHUB RUNNERS
+
+// 2. TRIGGER GITHUB RUNNERS
     if (url.pathname === "/start" && request.method === "POST") {
       const { fileName } = await request.json();
       const jobId = "job_" + Math.random().toString(36).substr(2, 9);
       
-      // Generate a secure read link specifically for GitHub runners
-      const b2Url = new URL(`https://${env.B2_ENDPOINT}/${env.B2_BUCKET}/${fileName}`);
+      const b2Url = new URL(`https://${env.B2_BUCKET}.${env.B2_ENDPOINT}/${fileName}`);
       const signedGet = await aws.sign(new Request(b2Url, { method: 'GET' }), { aws: { signQuery: true } });
       
-      await fetch(`${env.UPSTASH_URL}/set/${jobId}`, {
-        headers: { Authorization: `Bearer ${env.UPSTASH_TOKEN}` },
-        method: "POST",
-        body: JSON.stringify({ status: "processing", completed: 0, timestamps: [], fileName: fileName })
+      // Store the fileName in its own isolated key for the auto-delete later
+      await fetch(`${env.UPSTASH_URL}/set/file_${jobId}/${fileName}`, {
+        headers: { Authorization: `Bearer ${env.UPSTASH_TOKEN}` }
       });
 
       await fetch(`https://api.github.com/repos/${env.GITHUB_USERNAME}/${env.GITHUB_REPO}/dispatches`, {
@@ -72,39 +70,54 @@ export default {
     // 3. FRONTEND POLLING STATUS
     if (url.pathname.startsWith("/status/")) {
       const jobId = url.pathname.split("/")[2];
-      const redisRes = await fetch(`${env.UPSTASH_URL}/get/${jobId}`, {
-        headers: { Authorization: `Bearer ${env.UPSTASH_TOKEN}` }
-      });
-      const { result } = await redisRes.json();
-      return new Response(result, { headers: cors });
+      
+      // Fetch the isolated atomic keys
+      const compRes = await fetch(`${env.UPSTASH_URL}/get/comp_${jobId}`, { headers: { Authorization: `Bearer ${env.UPSTASH_TOKEN}` } });
+      const tsRes = await fetch(`${env.UPSTASH_URL}/smembers/ts_${jobId}`, { headers: { Authorization: `Bearer ${env.UPSTASH_TOKEN}` } });
+      
+      const compData = await compRes.json();
+      const tsData = await tsRes.json();
+      
+      const completed = parseInt(compData.result || 0);
+      const timestamps = tsData.result ? tsData.result.map(Number) : [];
+      const status = completed >= 160 ? "completed" : "processing";
+      
+      // We return it exactly as the frontend expects it, so no frontend changes are needed
+      return new Response(JSON.stringify({ status, completed, timestamps }), { headers: cors });
     }
 
     // 4. RECEIVE AI LOGS & AUTO-DELETE VIDEO
     if (url.pathname === "/update" && request.method === "POST") {
       const { jobId, foundTimestamps } = await request.json();
       
-      const stateRes = await fetch(`${env.UPSTASH_URL}/get/${jobId}`, {
+      // ATOMIC INCR: Forces Redis to perfectly add +1 in a queue, impossible to overwrite
+      const incRes = await fetch(`${env.UPSTASH_URL}/incr/comp_${jobId}`, {
         headers: { Authorization: `Bearer ${env.UPSTASH_TOKEN}` }
       });
-      let state = JSON.parse((await stateRes.json()).result);
+      const completedCount = (await incRes.json()).result;
+
+      // ATOMIC SADD: Safely adds timestamps to a Redis Set
+      if (foundTimestamps && foundTimestamps.length > 0) {
+        for (const ts of foundTimestamps) {
+           await fetch(`${env.UPSTASH_URL}/sadd/ts_${jobId}/${ts}`, {
+             headers: { Authorization: `Bearer ${env.UPSTASH_TOKEN}` }
+           });
+        }
+      }
       
-      state.completed += 1;
-      state.timestamps.push(...foundTimestamps);
-      
-      // Purge the video from Backblaze once all 160 runners finish
-      if (state.completed >= 160) {
-        state.status = "completed";
-        const deleteUrl = new URL(`https://${env.B2_ENDPOINT}/${env.B2_BUCKET}/${state.fileName}`);
-        const deleteReq = await aws.sign(new Request(deleteUrl, { method: 'DELETE' }));
-        await fetch(deleteReq);
+      if (completedCount >= 160) {
+        const fileRes = await fetch(`${env.UPSTASH_URL}/get/file_${jobId}`, {
+           headers: { Authorization: `Bearer ${env.UPSTASH_TOKEN}` }
+        });
+        const fileName = (await fileRes.json()).result;
+        
+        if (fileName) {
+            const deleteUrl = new URL(`https://${env.B2_BUCKET}.${env.B2_ENDPOINT}/${fileName}`);
+            const deleteReq = await aws.sign(new Request(deleteUrl, { method: 'DELETE' }));
+            await fetch(deleteReq);
+        }
       }
 
-      await fetch(`${env.UPSTASH_URL}/set/${jobId}`, {
-        headers: { Authorization: `Bearer ${env.UPSTASH_TOKEN}` },
-        method: "POST",
-        body: JSON.stringify(state)
-      });
-      
       return new Response("Updated", { status: 200, headers: cors });
     }
 
