@@ -140,7 +140,7 @@
                         let prev = start;
 
                         for (let i = 1; i <= state.timestamps.length; i++) {
-                            if (i < state.timestamps.length && state.timestamps[i] === prev + 1) {
+                            if (i < state.timestamps.length && state.timestamps[i] <= prev + 3) {
                                 prev = state.timestamps[i];
                             } else {
                                 if (start === prev) {
@@ -154,7 +154,6 @@
                                 }
                             }
                         }
-                        
                         document.getElementById('results').innerHTML = ranges.join("\n");
                     }
                     uploadBtn.disabled = false;
