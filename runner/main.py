@@ -15,9 +15,10 @@ END_SEC = START_SEC + CHUNK_DURATION_SEC
 
 cap = cv2.VideoCapture(VIDEO_URL)
 
+# Extract true frame counts to avoid broken MP4 timecodes
 total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 fps = cap.get(cv2.CAP_PROP_FPS)
-if not fps or fps <= 5 or fps > 120:
+if not fps or fps <= 0 or fps > 120:
     fps = 25.0
 
 video_duration_sec = total_frames / fps
@@ -28,30 +29,38 @@ if START_SEC < video_duration_sec:
     end_frame = min(int(END_SEC * fps), total_frames)
 
     cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
-    current_frame_idx = start_frame
-    frame_step = max(1, int(round(fps)))
+    current_frame = start_frame
+    step = max(1, int(round(fps))) # Step exactly 1 second of frames
 
-    while current_frame_idx < end_frame:
-        cap.set(cv2.CAP_PROP_POS_FRAMES, current_frame_idx)
+    prev_gray = None
+
+    while current_frame < end_frame:
+        cap.set(cv2.CAP_PROP_POS_FRAMES, current_frame)
         ret, frame = cap.read()
-        if not ret:
+        if not ret: 
             break
 
-        current_second = int(current_frame_idx / fps)
+        current_second = int(current_frame / fps)
 
-        # Convert to HSV to separate color intensity (Saturation) and Brightness (Value)
-        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-        sat_mean = np.mean(hsv[:, :, 1])
-        val_mean = np.mean(hsv[:, :, 2])
+        # Standardize resolution and blur heavily to ignore camera static/dust
+        frame = cv2.resize(frame, (640, 480))
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        gray = cv2.GaussianBlur(gray, (21, 21), 0)
 
-        # Baseline IR mode in this footage has Saturation < 10.0.
-        # Floodlight mode switches to color with Saturation > 18.0 and higher brightness.
-        is_floodlight_on = (sat_mean > 16.0) or (val_mean > 95.0 and sat_mean > 12.0)
+        if prev_gray is not None:
+            # Subtract current second from previous second
+            diff = cv2.absdiff(prev_gray, gray)
+            _, thresh = cv2.threshold(diff, 25, 255, cv2.THRESH_BINARY)
+            
+            # Count how many pixels physically moved/changed illumination
+            motion_pixels = cv2.countNonZero(thresh)
 
-        if is_floodlight_on:
-            found_timestamps.append(current_second)
+            # 3000 pixels is ~1% of the frame. Ignores bugs, guarantees human/light capture.
+            if motion_pixels > 3000:
+                found_timestamps.append(current_second)
 
-        current_frame_idx += frame_step
+        prev_gray = gray
+        current_frame += step
 
 cap.release()
 
@@ -64,6 +73,6 @@ try:
         json={"jobId": JOB_ID, "chunkId": CHUNK_ID, "foundTimestamps": unique_timestamps}
     )
     response.raise_for_status()
-    print(f"Chunk {CHUNK_ID} complete. Detected seconds: {unique_timestamps}")
+    print(f"Chunk {CHUNK_ID} complete. Detections: {unique_timestamps}")
 except Exception as e:
     print(f"Failed to post results: {e}")
